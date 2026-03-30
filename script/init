@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BACKEND_DIR="$REPO_ROOT/backend"
+PYTHON_VERSION="python3.13"
+
+echo "==> Setting up backend Python environment"
+
+# Check Python is available
+if ! command -v "$PYTHON_VERSION" &>/dev/null; then
+  echo "Error: $PYTHON_VERSION not found. Install it with: brew install python@3.13"
+  exit 1
+fi
+
+echo "    Using: $($PYTHON_VERSION --version)"
+
+# Create venv
+if [ ! -d "$BACKEND_DIR/.venv" ]; then
+  echo "    Creating virtual environment..."
+  $PYTHON_VERSION -m venv "$BACKEND_DIR/.venv"
+else
+  echo "    Virtual environment already exists"
+fi
+
+# Install deps
+echo "    Installing dependencies..."
+"$BACKEND_DIR/.venv/bin/pip" install --quiet --upgrade pip
+"$BACKEND_DIR/.venv/bin/pip" install --quiet -r "$BACKEND_DIR/requirements.txt"
+
+# Copy .env if it doesn't exist
+if [ ! -f "$BACKEND_DIR/.env" ]; then
+  cp "$BACKEND_DIR/.env.example" "$BACKEND_DIR/.env"
+  echo "    Created backend/.env from .env.example — fill in DOCUMENT_AI_PROCESSOR_ID"
+fi
+
+echo ""
+echo "==> Done! To run the backend:"
+echo "    source backend/.venv/bin/activate"
+echo "    uvicorn app.main:app --reload --app-dir backend"

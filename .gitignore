@@ -1,0 +1,37 @@
+# Terraform
+terraform/.terraform/
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/*.tfvars
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+backend/venv/
+backend/.env
+
+# Node
+node_modules/
+dist/
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Flutter / Android
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/build/
+mobile/.packages
+mobile/android/.gradle/
+mobile/android/app/google-services.json
+mobile/android/local.properties
+*.iml
+
+# OS
+.DS_Store

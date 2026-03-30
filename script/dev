@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+cleanup() {
+  echo ""
+  echo "Shutting down..."
+  kill 0 2>/dev/null
+  wait 2>/dev/null
+}
+trap cleanup EXIT INT TERM
+
+echo "==> Starting backend (localhost:8000)"
+source "$REPO_ROOT/backend/.venv/bin/activate"
+uvicorn app.main:app --reload --app-dir "$REPO_ROOT/backend" &
+
+echo "==> Starting frontend (localhost:5173)"
+npm run dev --prefix "$REPO_ROOT/web" &
+
+echo ""
+echo "==> Both running. Ctrl+C to stop."
+wait

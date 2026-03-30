@@ -29,8 +29,13 @@ class AuthService {
     );
   }
 
+  /// Last sign-in error message (for debugging).
+  static String? lastError;
+
   /// Full sign-in with account picker.
+  /// Returns true on success. On failure, check [lastError].
   static Future<bool> signIn() async {
+    lastError = null;
     try {
       _currentUser = await _googleSignIn.authenticate(
         scopeHint: AppConfig.scopes,
@@ -41,10 +46,12 @@ class AuthService {
       }
       return _currentUser != null;
     } on GoogleSignInException catch (e) {
-      print('Sign-in error: ${e.code.name} ${e.description}');
+      lastError = '${e.code.name}: ${e.description}';
+      print('Sign-in error: $lastError');
       return false;
     } catch (e) {
-      print('Sign-in error: $e');
+      lastError = e.toString();
+      print('Sign-in error: $lastError');
       return false;
     }
   }

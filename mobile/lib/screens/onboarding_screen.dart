@@ -68,8 +68,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
     if (success) {
       _goToStep(2);
-    } else if (AuthService.currentUser == null) {
-      setState(() => _authError = null); // silent on cancel
+    } else {
+      setState(() => _authError = AuthService.lastError);
     }
   }
 

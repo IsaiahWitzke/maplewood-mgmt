@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'sheets_service.dart';
+import 'sheet_cache.dart';
 
 class ProjectService {
   static const _prefKey = 'projects_list';
@@ -43,13 +43,13 @@ class ProjectService {
     await _save();
   }
 
-  /// Sync local project list with the spreadsheet's Project column.
-  /// Hard sync: adds new ones from sheet, removes ones no longer in sheet,
+  /// Sync local project list with the SheetCache's Project column.
+  /// Hard sync: adds new ones from cache, removes ones no longer in cache,
   /// preserves local usage timestamps for existing ones.
-  static Future<void> syncWithSheet() async {
+  static Future<void> syncWithCache() async {
     await _ensureLoaded();
     try {
-      final sheetProjects = await SheetsService.getProjects();
+      final sheetProjects = SheetCache.getProjects();
       final sheetSet = sheetProjects.toSet();
 
       // Remove projects no longer in sheet

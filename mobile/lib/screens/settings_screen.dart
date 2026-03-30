@@ -1,8 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:googleapis/drive/v3.dart' as drive;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/auth_service.dart';
-import '../services/sheets_service.dart';
-import '../services/project_service.dart';
+import '../services/storage_service.dart';
+import 'folder_picker.dart';
+import 'onboarding_screen.dart';
+import 'spreadsheet_picker.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -12,218 +15,55 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final List<drive.File> _spreadsheets = [];
-  bool _loading = true;
-  bool _loadingMore = false;
-  bool _creating = false;
-  String? _currentId;
-  String? _nextPageToken;
-  String _searchQuery = '';
-  final _scrollController = ScrollController();
-  final _searchController = TextEditingController();
+  String _receiptFolderName = 'My Drive';
+  String _spreadsheetName = '...';
 
   @override
   void initState() {
     super.initState();
-    _scrollController.addListener(_onScroll);
-    _load();
+    _loadSettings();
   }
 
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  void _onScroll() {
-    if (_scrollController.position.pixels >=
-            _scrollController.position.maxScrollExtent - 200 &&
-        !_loadingMore &&
-        _nextPageToken != null) {
-      _loadMore();
+  Future<void> _loadSettings() async {
+    final folderName = await StorageService.getReceiptFolderName();
+    final prefs = await SharedPreferences.getInstance();
+    // We don't store the sheet name, so fetch it or show a placeholder
+    final sheetId = prefs.getString('spreadsheet_id');
+    String sheetName = 'Not set';
+    if (sheetId != null) {
+      try {
+        final driveApi = await AuthService.getDriveApi();
+        final file = await driveApi.files.get(sheetId) as dynamic;
+        sheetName = file.name ?? 'Untitled';
+      } catch (_) {
+        sheetName = 'Unknown';
+      }
     }
-  }
-
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _spreadsheets.clear();
-      _nextPageToken = null;
-    });
-    try {
-      _currentId = await SheetsService.getSpreadsheetId();
-      await _fetchPage();
-    } catch (e) {
-      print('Error loading spreadsheets: $e');
-    }
-    setState(() => _loading = false);
-  }
-
-  Future<void> _loadMore() async {
-    if (_loadingMore || _nextPageToken == null) return;
-    setState(() => _loadingMore = true);
-    try {
-      await _fetchPage();
-    } catch (e) {
-      print('Error loading more: $e');
-    }
-    setState(() => _loadingMore = false);
-  }
-
-  Future<void> _fetchPage() async {
-    final driveApi = await AuthService.getDriveApi();
-    var query = "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false";
-    if (_searchQuery.isNotEmpty) {
-      query += " and name contains '${_searchQuery.replaceAll("'", "\\'")}'";
-    }
-    final result = await driveApi.files.list(
-      q: query,
-      orderBy: 'modifiedTime desc',
-      pageSize: 20,
-      pageToken: _nextPageToken,
-      $fields: 'nextPageToken, files(id, name, modifiedTime)',
-    );
-    setState(() {
-      _spreadsheets.addAll(result.files ?? []);
-      _nextPageToken = result.nextPageToken;
-    });
-  }
-
-  void _onSearchChanged(String value) {
-    _searchQuery = value.trim();
-    _load();
-  }
-
-  Future<void> _select(String id, String name) async {
-    await SheetsService.setSpreadsheetId(id);
-    await ProjectService.clear();
-    ProjectService.syncWithSheet(); // fire and forget
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Using "$name" \u2713')),
-      );
-      Navigator.of(context).pop();
+      setState(() {
+        _receiptFolderName = folderName;
+        _spreadsheetName = sheetName;
+      });
     }
   }
 
-  Future<void> _showCreateDialog() async {
-    final nameController = TextEditingController(text: 'Maplewood Receipts');
-    String? selectedFolderId;
-    String selectedFolderName = 'My Drive (root)';
-    List<drive.File>? folders;
-
-    // Fetch folders
-    try {
-      final driveApi = await AuthService.getDriveApi();
-      final result = await driveApi.files.list(
-        q: "mimeType='application/vnd.google-apps.folder' and trashed=false",
-        orderBy: 'name',
-        pageSize: 100,
-        $fields: 'files(id, name)',
-      );
-      folders = result.files;
-    } catch (e) {
-      print('Error loading folders: $e');
-    }
-
-    if (!mounted) return;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: const Text('New Spreadsheet'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Name',
-                  border: OutlineInputBorder(),
-                ),
-                autofocus: true,
-              ),
-              const SizedBox(height: 16),
-              Text('Location', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-              const SizedBox(height: 8),
-              InkWell(
-                onTap: () async {
-                  final picked = await showDialog<drive.File>(
-                    context: ctx,
-                    builder: (_) => _FolderPickerDialog(folders: folders ?? []),
-                  );
-                  if (picked != null) {
-                    setDialogState(() {
-                      selectedFolderId = picked.id;
-                      selectedFolderName = picked.name ?? 'Untitled';
-                    });
-                  }
-                },
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey[400]!),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.folder, size: 20, color: Colors.grey[600]),
-                      const SizedBox(width: 8),
-                      Expanded(child: Text(selectedFolderName)),
-                      Icon(Icons.chevron_right, color: Colors.grey[400]),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Create'),
-            ),
-          ],
-        ),
-      ),
+  Future<void> _pickReceiptFolder() async {
+    final result = await Navigator.of(context).push<FolderSelection>(
+      MaterialPageRoute(builder: (_) => const DriveFolderPicker()),
     );
-
-    if (confirmed != true) return;
-
-    setState(() => _creating = true);
-    try {
-      await SheetsService.createSpreadsheet(
-        name: nameController.text.trim(),
-        folderId: selectedFolderId,
-      );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Spreadsheet created \u2713')),
-        );
-        Navigator.of(context).pop();
-      }
-    } catch (e) {
-      setState(() => _creating = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
+    if (result != null) {
+      await StorageService.setReceiptFolder(id: result.id, name: result.name);
+      setState(() => _receiptFolderName = result.name);
     }
   }
 
-  String _timeAgo(DateTime dt) {
-    final diff = DateTime.now().difference(dt);
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return '${diff.inHours}h ago';
-    if (diff.inDays < 30) return '${diff.inDays}d ago';
-    return '${dt.month}/${dt.day}/${dt.year}';
+  Future<void> _pickSpreadsheet() async {
+    final name = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const SpreadsheetPickerScreen()),
+    );
+    if (name != null && mounted) {
+      setState(() => _spreadsheetName = name);
+    }
   }
 
   @override
@@ -231,126 +71,127 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        title: const Text('Select Spreadsheet'),
+        title: const Text('Settings'),
         backgroundColor: Colors.grey[50],
         elevation: 0,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: _creating ? null : _showCreateDialog,
-            tooltip: 'Create new spreadsheet',
-          ),
-        ],
       ),
-      body: Column(
+      body: ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         children: [
-          // Search bar
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: TextField(
-              decoration: InputDecoration(
-                hintText: 'Search spreadsheets...',
-                prefixIcon: const Icon(Icons.search, size: 20),
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey[300]!)),
-                enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey[300]!)),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                filled: true,
-                fillColor: Colors.white,
+          // Receipt Spreadsheet
+          _buildSettingTile(
+            icon: Icons.table_chart,
+            iconColor: Colors.green[600]!,
+            label: 'Receipt Spreadsheet',
+            value: _spreadsheetName,
+            onTap: _pickSpreadsheet,
+          ),
+          const SizedBox(height: 8),
+
+          // Photos Folder
+          _buildSettingTile(
+            icon: Icons.folder,
+            iconColor: Colors.amber[700]!,
+            label: 'Photos Folder',
+            value: _receiptFolderName,
+            onTap: _pickReceiptFolder,
+          ),
+
+          // Debug: reset onboarding
+          if (kDebugMode) ...[
+            const SizedBox(height: 32),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _resetOnboarding,
+                icon: const Icon(Icons.restart_alt, size: 18),
+                label: const Text('Reset Onboarding (debug)'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.red[400],
+                  side: BorderSide(color: Colors.red[300]!),
+                ),
               ),
-              controller: _searchController,
-              onChanged: _onSearchChanged,
             ),
-          ),
-
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : _spreadsheets.isEmpty
-                    ? Center(
-                        child: Text('No spreadsheets found',
-                            style: TextStyle(color: Colors.grey[500])))
-                    : ListView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        itemCount: _spreadsheets.length + (_nextPageToken != null ? 1 : 0),
-                        itemBuilder: (context, index) {
-                          if (index >= _spreadsheets.length) {
-                            return const Padding(
-                              padding: EdgeInsets.all(16),
-                              child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-                            );
-                          }
-                          final file = _spreadsheets[index];
-                          final isSelected = file.id == _currentId;
-                          return ListTile(
-                            leading: Icon(
-                              Icons.table_chart,
-                              color: isSelected
-                                  ? Colors.green[600]
-                                  : Colors.green[300],
-                            ),
-                            title: Text(
-                              file.name ?? 'Untitled',
-                              style: TextStyle(
-                                fontWeight: isSelected
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                              ),
-                            ),
-                            subtitle: file.modifiedTime != null
-                                ? Text(
-                                    'Modified ${_timeAgo(file.modifiedTime!)}',
-                                    style: TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.grey[500]),
-                                  )
-                                : null,
-                            trailing: isSelected
-                                ? Icon(Icons.check_circle,
-                                    color: Colors.green[600])
-                                : const Icon(Icons.chevron_right),
-                            onTap: () => _select(file.id!, file.name ?? 'Untitled'),
-                          );
-                        },
-                      ),
-          ),
-
+          ],
         ],
       ),
     );
   }
-}
 
-class _FolderPickerDialog extends StatelessWidget {
-  final List<drive.File> folders;
-  const _FolderPickerDialog({required this.folders});
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Choose folder'),
-      content: SizedBox(
-        width: double.maxFinite,
-        height: 300,
-        child: ListView(
+  Widget _buildSettingTile({
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required String value,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey[300]!),
+        ),
+        child: Row(
           children: [
-            ListTile(
-              leading: const Icon(Icons.folder, color: Colors.grey),
-              title: const Text('My Drive (root)'),
-              onTap: () => Navigator.pop(context, drive.File()..name = 'My Drive (root)'),
+            Icon(icon, size: 20, color: iconColor),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      style:
+                          TextStyle(fontSize: 12, color: Colors.grey[600])),
+                  const SizedBox(height: 2),
+                  Text(value, style: const TextStyle(fontSize: 15)),
+                ],
+              ),
             ),
-            ...folders.map((f) => ListTile(
-              leading: Icon(Icons.folder, color: Colors.amber[700]),
-              title: Text(f.name ?? 'Untitled'),
-              onTap: () => Navigator.pop(context, f),
-            )),
+            Icon(Icons.chevron_right, color: Colors.grey[400]),
           ],
         ),
       ),
     );
   }
+
+  Future<void> _resetOnboarding() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset Onboarding?'),
+        content: const Text(
+            'This will sign you out and clear all settings. You will go through the onboarding flow again.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child:
+                  Text('Reset', style: TextStyle(color: Colors.red[400]))),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('onboarding_complete');
+    await prefs.remove('receipt_folder_id');
+    await prefs.remove('receipt_folder_name');
+    await prefs.remove('spreadsheet_id');
+    await prefs.remove('projects_list');
+    await AuthService.signOut();
+
+    if (mounted) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const OnboardingScreen()),
+        (_) => false,
+      );
+    }
+  }
 }
+

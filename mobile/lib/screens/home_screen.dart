@@ -2,8 +2,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import '../services/gemini_service.dart';
+import '../services/sheet_cache.dart';
 import '../services/storage_service.dart';
-import '../services/sheets_service.dart';
 import 'review_screen.dart';
 import 'settings_screen.dart';
 
@@ -29,18 +29,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initCamera();
-    _checkSpreadsheet();
-  }
-
-  Future<void> _checkSpreadsheet() async {
-    final id = await SheetsService.getSpreadsheetId();
-    if (id == null || id.isEmpty) {
-      if (mounted) {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const SettingsScreen()),
-        );
-      }
-    }
   }
 
   @override
@@ -98,10 +86,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       final imageBytes = await photo.readAsBytes();
 
-      // Upload image and run OCR in parallel
+      // Upload image, run OCR, and sync cache in parallel
       final results = await Future.wait([
         StorageService.uploadReceiptImage(imageBytes),
         GeminiService.extractReceipt(imageBytes),
+        SheetCache.sync(),
       ]);
 
       final imageUrl = results[0] as String;

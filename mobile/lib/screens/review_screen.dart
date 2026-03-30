@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../services/auth_service.dart';
 import '../services/gemini_service.dart';
+import '../services/sheet_cache.dart';
 import '../services/sheets_service.dart';
 import '../services/project_service.dart';
 import 'settings_screen.dart';
@@ -28,6 +31,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   bool _saving = false;
   bool _loadingProjects = true;
   String? _sheetName;
+  List<Map<String, String>> _duplicates = [];
 
   @override
   void initState() {
@@ -39,6 +43,86 @@ class _ReviewScreenState extends State<ReviewScreen> {
     _projectController = TextEditingController();
     _loadProjects();
     _loadSheetName();
+    _checkDuplicates();
+  }
+
+  void _checkDuplicates() {
+    // Runs against the local cache — no API call
+    final dupes = SheetCache.findDuplicates(
+      date: widget.receiptData.date ?? '',
+      total: widget.receiptData.total,
+    );
+    if (dupes.isNotEmpty) {
+      setState(() => _duplicates = dupes);
+    }
+  }
+
+  void _showDuplicateModal(Map<String, String> r) {
+    final imageLink = r[Col.image] ?? '';
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Possible Duplicate'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _modalRow('Project', r[Col.project] ?? ''),
+              _modalRow('Vendor', r[Col.vendor] ?? ''),
+              _modalRow('Date', r[Col.receiptDate] ?? ''),
+              _modalRow('Total', '\$${r[Col.totalCost] ?? ''}'),
+              _modalRow('Tax', (r[Col.tax] ?? '').isNotEmpty ? '\$${r[Col.tax]}' : '—'),
+              _modalRow('Added', r[Col.inputDate] ?? ''),
+              const SizedBox(height: 12),
+              if (imageLink.isNotEmpty)
+                InkWell(
+                  onTap: () => launchUrl(Uri.parse(imageLink),
+                      mode: LaunchMode.externalApplication),
+                  child: Row(
+                    children: [
+                      Icon(Icons.image, size: 18, color: Colors.blue[600]),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text('View receipt image',
+                            style: TextStyle(
+                                color: Colors.blue[600],
+                                decoration: TextDecoration.underline)),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _modalRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 70,
+            child: Text(label,
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[600],
+                    fontSize: 13)),
+          ),
+          Expanded(child: Text(value.isEmpty ? '—' : value, style: const TextStyle(fontSize: 13))),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadProjects() async {
@@ -54,12 +138,14 @@ class _ReviewScreenState extends State<ReviewScreen> {
   }
 
   Future<void> _loadSheetName() async {
-    // We don't have the sheet name stored, just show the ID truncated
     final id = await SheetsService.getSpreadsheetId();
-    if (id != null && mounted) {
-      setState(() {
-        _sheetName = id.length > 20 ? '${id.substring(0, 20)}...' : id;
-      });
+    if (id == null) return;
+    try {
+      final driveApi = await AuthService.getDriveApi();
+      final file = await driveApi.files.get(id, $fields: 'name') as dynamic;
+      if (mounted) setState(() => _sheetName = file.name ?? 'Untitled');
+    } catch (_) {
+      if (mounted) setState(() => _sheetName = 'Spreadsheet');
     }
   }
 
@@ -75,15 +161,16 @@ class _ReviewScreenState extends State<ReviewScreen> {
     setState(() => _saving = true);
 
     try {
-      await SheetsService.appendReceipt(
-        receiptNumber: widget.receiptData.receiptNumber,
-        project: project,
-        vendor: _vendorController.text,
-        total: double.tryParse(_totalController.text),
-        tax: widget.receiptData.tax,
-        receiptDate: _dateController.text,
-        imageLink: widget.imageUrl,
-      );
+      await SheetsService.appendReceipt({
+        Col.receiptNumber: widget.receiptData.receiptNumber,
+        Col.project: project,
+        Col.vendor: _vendorController.text,
+        Col.totalCost: double.tryParse(_totalController.text) ?? '',
+        Col.tax: widget.receiptData.tax ?? '',
+        Col.receiptDate: _dateController.text,
+        Col.inputDate: DateTime.now().toIso8601String(),
+        Col.image: widget.imageUrl,
+      });
 
       // Mark project as recently used
       await ProjectService.markUsed(project);
@@ -158,8 +245,48 @@ class _ReviewScreenState extends State<ReviewScreen> {
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+              // Duplicate warning
+              if (_duplicates.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: Material(
+                    color: Colors.orange[50],
+                    borderRadius: BorderRadius.circular(8),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () => _showDuplicateModal(_duplicates.first),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        child: Row(
+                          children: [
+                            Icon(Icons.warning_amber_rounded,
+                                color: Colors.orange[700], size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _duplicates.length == 1
+                                    ? 'Possible duplicate — tap to view'
+                                    : '${_duplicates.length} possible duplicates — tap to view',
+                                style: TextStyle(
+                                    color: Colors.orange[900], fontSize: 13),
+                              ),
+                            ),
+                            Icon(Icons.chevron_right,
+                                color: Colors.orange[400], size: 20),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
               // Project Name
               const Text('Project:',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
@@ -250,8 +377,12 @@ class _ReviewScreenState extends State<ReviewScreen> {
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 ),
               ),
+                    ],
+                  ),
+                ),
+              ),
 
-              const Spacer(),
+              const SizedBox(height: 16),
 
               // Confirm button (full width)
               SizedBox(

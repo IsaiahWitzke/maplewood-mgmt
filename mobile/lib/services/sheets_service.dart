@@ -3,6 +3,7 @@ import 'package:googleapis/sheets/v4.dart' as sheets;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import 'auth_service.dart';
+import 'sheet_cache.dart';
 
 class SheetsService {
   static const _prefKey = 'spreadsheet_id';
@@ -35,12 +36,12 @@ class SheetsService {
     final id = created.spreadsheetId!;
 
     // Add headers
+    final headers = Col.defaultHeaders;
+    final lastCol = String.fromCharCode(64 + headers.length); // A=1
     await api.spreadsheets.values.update(
-      sheets.ValueRange(values: [
-        ['Receipt #', 'Project', 'Vendor', 'Total Cost', 'Tax', 'Receipt Date', 'Input Date', 'Image']
-      ]),
+      sheets.ValueRange(values: [headers]),
       id,
-      '${AppConfig.sheetName}!A1:H1',
+      '${AppConfig.sheetName}!A1:${lastCol}1',
       valueInputOption: 'RAW',
     );
 
@@ -70,55 +71,23 @@ class SheetsService {
     return await createSpreadsheet();
   }
 
-  /// Append a receipt row.
-  static Future<void> appendReceipt({
-    required String receiptNumber,
-    required String project,
-    required String vendor,
-    required double? total,
-    required double? tax,
-    required String receiptDate,
-    required String imageLink,
-  }) async {
+  /// Append a receipt row using SheetCache for column mapping.
+  static Future<void> appendReceipt(Map<String, dynamic> data) async {
     final api = await AuthService.getSheetsApi();
     final spreadsheetId = await ensureSpreadsheet();
-    final inputDate = DateTime.now().toIso8601String();
+
+    final row = SheetCache.buildRow(data);
+    final colCount = row.length;
+    final lastCol = String.fromCharCode(64 + colCount); // A=1
 
     await api.spreadsheets.values.append(
-      sheets.ValueRange(values: [
-        [receiptNumber, project, vendor, total ?? '', tax ?? '', receiptDate, inputDate, imageLink]
-      ]),
+      sheets.ValueRange(values: [row]),
       spreadsheetId,
-      '${AppConfig.sheetName}!A:H',
+      '${AppConfig.sheetName}!A:$lastCol',
       valueInputOption: 'USER_ENTERED',
     );
-  }
 
-  /// Get unique project names from the sheet, sorted by most recent first.
-  static Future<List<String>> getProjects() async {
-    final api = await AuthService.getSheetsApi();
-    final spreadsheetId = await getSpreadsheetId();
-    if (spreadsheetId == null) return [];
-
-    try {
-      final response = await api.spreadsheets.values.get(
-        spreadsheetId,
-        '${AppConfig.sheetName}!B:B', // Project column only
-      );
-
-      final rows = response.values;
-      if (rows == null || rows.length < 2) return [];
-
-      final projects = <String>{};
-      for (final row in rows.skip(1)) {
-        if (row.isEmpty) continue;
-        final project = row[0]?.toString() ?? '';
-        if (project.isNotEmpty) projects.add(project);
-      }
-      return projects.toList();
-    } catch (e) {
-      print('Error fetching projects: $e');
-      return [];
-    }
+    // Update local cache
+    SheetCache.addRow(SheetCache.buildRowMap(data));
   }
 }

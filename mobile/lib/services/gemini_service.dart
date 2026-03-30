@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'auth_service.dart';
+import 'sheet_cache.dart';
 
 class ReceiptData {
   final String receiptNumber;
@@ -9,6 +10,7 @@ class ReceiptData {
   final String? date;
   final double? total;
   final double? tax;
+  final String? description;
 
   ReceiptData({
     required this.receiptNumber,
@@ -16,6 +18,7 @@ class ReceiptData {
     this.date,
     this.total,
     this.tax,
+    this.description,
   });
 
   factory ReceiptData.fromJson(Map<String, dynamic> json) {
@@ -25,6 +28,7 @@ class ReceiptData {
       date: json['date']?.toString(),
       total: _toDouble(json['total']),
       tax: _toDouble(json['tax']),
+      description: json['description']?.toString(),
     );
   }
 
@@ -43,6 +47,13 @@ class GeminiService {
   static String _buildPrompt() {
     final now = DateTime.now();
     final today = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+
+    // Feed known vendors so Gemini can match existing names
+    final knownVendors = SheetCache.getVendors();
+    final vendorHint = knownVendors.isNotEmpty
+        ? '\nKnown vendors (reuse one of these if it matches): ${knownVendors.join(', ')}\n'
+        : '';
+
     return '''Extract the following fields from this receipt image.
 Return ONLY valid JSON with these exact keys:
 {
@@ -50,18 +61,20 @@ Return ONLY valid JSON with these exact keys:
   "vendor": "store name",
   "date": "YYYY-MM-DD",
   "total": 0.00,
-  "tax": 0.00
+  "tax": 0.00,
+  "description": "brief category of items"
 }
 
 Today's date is $today. Use this to resolve ambiguous dates on the receipt.
 For example, "25/03/26" on a receipt near today's date means 2026-03-25, not 2025-03-26.
 Receipt dates are almost always within the last few days of today.
-
+$vendorHint
 Rules:
 - receipt_number = any unique identifier on the receipt (transaction #, invoice #, receipt #, order #). If none found, use null.
-- vendor = store/supplier name, always lowercase (e.g. "costco wholesale" not "COSTCO WHOLESALE")
+- vendor = store/supplier name, always lowercase (e.g. "costco wholesale" not "COSTCO WHOLESALE"). If it matches a known vendor above, use that exact spelling.
 - total = final amount paid
 - tax = HST / tax amount (this is Ontario, Canada - HST is 13%)
+- description = a very brief summary of what was purchased (1-3 words). Examples: "lumber", "plumbing, electrical", "paint supplies", "fasteners". If unclear, use null.
 - If a field is not visible or unclear, use null
 - Amounts must be numbers, not strings
 - Date must be YYYY-MM-DD or null

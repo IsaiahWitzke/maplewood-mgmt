@@ -21,26 +21,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final _pageController = PageController();
   int _currentStep = 0;
 
-  // Step 1: Auth
+  // Step 2: Auth
   bool _signingIn = false;
   String? _authError;
 
-  // Step 2: Camera
+  // Step 3: Camera
   bool _cameraDenied = false;
   bool _cameraPermanentlyDenied = false;
 
-  // Step 3: Folder
-  List<drive.File> _rootFolders = [];
-  bool _loadingFolders = true;
+  // Step 4: Combined Drive setup
+  bool _createNewFolder = true;
   String? _selectedFolderId;
-  String _selectedFolderName = '';
-  bool _createNewFolder = true; // default: create "Maplewood Receipts"
-  bool _creatingFolder = false;
-
-  // Step 4: Spreadsheet
+  String _selectedFolderName = 'Maplewood Receipts';
   bool _createNewSheet = true;
-  final _sheetNameController =
-      TextEditingController(text: 'Maplewood Receipts');
   String? _existingSheetId;
   String? _existingSheetName;
   bool _finishing = false;
@@ -48,7 +41,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   @override
   void dispose() {
     _pageController.dispose();
-    _sheetNameController.dispose();
     super.dispose();
   }
 
@@ -61,7 +53,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  // ── Step 1: Sign In ──
+  // ── Step 2: Sign In ──
 
   Future<void> _signIn() async {
     setState(() {
@@ -75,15 +67,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     setState(() => _signingIn = false);
 
     if (success) {
-      _goToStep(1);
+      _goToStep(2);
     } else if (AuthService.currentUser == null) {
-      // User cancelled or error — only show error if it wasn't a cancel
-      // signIn returns false for both cancel and error, so we keep it subtle
       setState(() => _authError = null); // silent on cancel
     }
   }
 
-  // ── Step 2: Camera Permission ──
+  // ── Step 3: Camera Permission ──
 
   Future<void> _requestCamera() async {
     final status = await Permission.camera.request();
@@ -94,8 +84,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         _cameraDenied = false;
         _cameraPermanentlyDenied = false;
       });
-      _loadRootFolders();
-      _goToStep(2);
+      _goToStep(3);
     } else if (status.isPermanentlyDenied) {
       setState(() {
         _cameraPermanentlyDenied = true;
@@ -109,82 +98,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
-  // ── Step 3: Folder ──
+  // ── Step 4: Combined Drive Setup ──
 
-  Future<void> _loadRootFolders() async {
-    setState(() => _loadingFolders = true);
-    try {
-      final driveApi = await AuthService.getDriveApi();
-      final result = await driveApi.files.list(
-        q: "mimeType='application/vnd.google-apps.folder' and 'root' in parents and trashed=false",
-        orderBy: 'modifiedTime desc',
-        pageSize: 4,
-        $fields: 'files(id, name)',
-      );
-      if (mounted) {
-        setState(() {
-          _rootFolders = result.files ?? [];
-          _loadingFolders = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) setState(() => _loadingFolders = false);
-    }
-  }
-
-  void _selectFolder(String? id, String name, {bool isNew = false}) {
-    setState(() {
-      _selectedFolderId = id;
-      _selectedFolderName = name;
-      _createNewFolder = isNew;
-    });
-  }
-
-  Future<void> _confirmFolder() async {
-    if (_createNewFolder) {
-      // Create the folder in Drive
-      setState(() => _creatingFolder = true);
-      try {
-        final driveApi = await AuthService.getDriveApi();
-        final folder = await driveApi.files.create(
-          drive.File(
-            name: 'Maplewood Receipts',
-            mimeType: 'application/vnd.google-apps.folder',
-            parents: ['root'],
-          ),
-          $fields: 'id',
-        );
-        _selectedFolderId = folder.id;
-        _selectedFolderName = 'Maplewood Receipts';
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error creating folder: $e')),
-          );
-        }
-        setState(() => _creatingFolder = false);
-        return;
-      }
-      setState(() => _creatingFolder = false);
-    }
-
-    await StorageService.setReceiptFolder(
-        id: _selectedFolderId, name: _selectedFolderName);
-    _goToStep(3);
-  }
-
-  Future<void> _browseForFolder() async {
+  Future<void> _changeFolder() async {
     final result = await Navigator.of(context).push<FolderSelection>(
       MaterialPageRoute(builder: (_) => const DriveFolderPicker()),
     );
     if (result != null) {
-      _selectFolder(result.id, result.name, isNew: false);
+      setState(() {
+        _selectedFolderId = result.id;
+        _selectedFolderName = result.name;
+        _createNewFolder = false;
+      });
     }
   }
 
-  // ── Step 4: Spreadsheet ──
-
-  Future<void> _pickExistingSheet() async {
+  Future<void> _changeSheet() async {
     final result = await showModalBottomSheet<_SheetPick>(
       context: context,
       isScrollControlled: true,
@@ -202,11 +131,27 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Future<void> _finish() async {
     setState(() => _finishing = true);
     try {
+      // Create folder if needed
+      if (_createNewFolder) {
+        final driveApi = await AuthService.getDriveApi();
+        final folder = await driveApi.files.create(
+          drive.File(
+            name: 'Maplewood Receipts',
+            mimeType: 'application/vnd.google-apps.folder',
+            parents: ['root'],
+          ),
+          $fields: 'id',
+        );
+        _selectedFolderId = folder.id;
+        _selectedFolderName = 'Maplewood Receipts';
+      }
+      await StorageService.setReceiptFolder(
+          id: _selectedFolderId, name: _selectedFolderName);
+
+      // Create spreadsheet if needed
       if (_createNewSheet) {
         await SheetsService.createSpreadsheet(
-          name: _sheetNameController.text.trim().isEmpty
-              ? 'Maplewood Receipts'
-              : _sheetNameController.text.trim(),
+          name: 'Maplewood Receipts',
           folderId: _selectedFolderId,
         );
       } else if (_existingSheetId != null) {
@@ -271,10 +216,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 controller: _pageController,
                 physics: const NeverScrollableScrollPhysics(),
                 children: [
+                  _buildWelcomeStep(),
                   _buildSignInStep(),
                   _buildCameraStep(),
-                  _buildFolderStep(),
-                  _buildSheetStep(),
+                  _buildDriveSetupStep(),
                 ],
               ),
             ),
@@ -284,7 +229,106 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  // ── Step 1 UI ──
+  // ── Step 1: Welcome / How it works ──
+
+  Widget _buildWelcomeStep() {
+    return Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        children: [
+          const Spacer(),
+          const Text(
+            'How Maplewood works',
+            style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 32),
+          _buildFeatureRow(
+            Icons.camera_alt,
+            'Snap',
+            'Take a photo of any receipt',
+          ),
+          const SizedBox(height: 20),
+          _buildFeatureRow(
+            Icons.auto_awesome,
+            'Extract',
+            'AI reads the vendor, date, and total',
+          ),
+          const SizedBox(height: 20),
+          _buildFeatureRow(
+            Icons.table_chart,
+            'Track',
+            'Data goes to a Google Sheet, photo goes to your Drive',
+          ),
+          const SizedBox(height: 32),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.blue[50],
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.lock_outline, size: 18, color: Colors.blue[400]),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Everything stays in your Google account. Maplewood doesn\u2019t store your data.',
+                    style: TextStyle(fontSize: 13, color: Colors.blue[700]),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Spacer(),
+          SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: ElevatedButton(
+              onPressed: () => _goToStep(1),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue[600],
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text('Sounds good!', style: TextStyle(fontSize: 16)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFeatureRow(IconData icon, String title, String subtitle) {
+    return Row(
+      children: [
+        Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: Colors.blue[50],
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: Colors.blue[600], size: 22),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title,
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w600)),
+              Text(subtitle,
+                  style: TextStyle(fontSize: 14, color: Colors.grey[600])),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── Step 2: Sign In ──
 
   Widget _buildSignInStep() {
     return Padding(
@@ -293,16 +337,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           const Spacer(),
-          Icon(Icons.receipt_long, size: 64, color: Colors.blue[400]),
+          Icon(Icons.account_circle, size: 64, color: Colors.blue[400]),
           const SizedBox(height: 24),
           const Text(
-            'Welcome to Maplewood',
+            'Sign In',
             style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           Text(
-            'Construction receipt management',
-            style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+            'Maplewood saves directly to your Google Drive and Sheets \u2014 sign in to connect your account.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 15, color: Colors.grey[600]),
           ),
           const SizedBox(height: 48),
           if (_authError != null) ...[
@@ -347,18 +392,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       style: TextStyle(fontSize: 16)),
             ),
           ),
-          const SizedBox(height: 12),
-          Text(
-            'Required for Google Drive & Sheets access',
-            style: TextStyle(fontSize: 13, color: Colors.grey[500]),
-          ),
           const Spacer(),
         ],
       ),
     );
   }
 
-  // ── Step 2 UI ──
+  // ── Step 3: Camera ──
 
   Widget _buildCameraStep() {
     return Padding(
@@ -427,231 +467,65 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  // ── Step 3 UI ──
+  // ── Step 4: Combined Drive Setup ──
 
-  Widget _buildFolderStep() {
+  Widget _buildDriveSetupStep() {
+    final folderLabel = _createNewFolder
+        ? 'Maplewood Receipts (new folder)'
+        : _selectedFolderName;
+    final sheetLabel = _createNewSheet
+        ? 'Maplewood Receipts (new spreadsheet)'
+        : _existingSheetName ?? 'Not set';
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 32, 24, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Receipt Images',
+            'Set up your Drive',
             style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 4),
           Text(
-            'Choose a Google Drive folder for your receipt photos.',
+            'Maplewood saves receipt photos to a Google Drive folder and tracks the data in a spreadsheet.',
             style: TextStyle(fontSize: 15, color: Colors.grey[600]),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 28),
 
-          Expanded(
-            child: _loadingFolders
-                ? const Center(child: CircularProgressIndicator())
-                : ListView(
-                    children: [
-                      // Create new option
-                      _buildFolderTile(
-                        icon: Icons.create_new_folder,
-                        iconColor: Colors.blue,
-                        title: 'Maplewood Receipts',
-                        subtitle: 'Create new folder in My Drive',
-                        selected: _createNewFolder,
-                        onTap: () =>
-                            _selectFolder(null, 'Maplewood Receipts', isNew: true),
-                      ),
-
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        child: Text('Or choose an existing folder:',
-                            style: TextStyle(
-                                fontSize: 13, color: Colors.grey[500])),
-                      ),
-
-                      // Root folders
-                      ..._rootFolders.map((f) => _buildFolderTile(
-                            icon: Icons.folder,
-                            iconColor: Colors.amber[700]!,
-                            title: f.name ?? 'Untitled',
-                            selected: !_createNewFolder &&
-                                _selectedFolderId == f.id,
-                            onTap: () => _selectFolder(
-                                f.id, f.name ?? 'Untitled',
-                                isNew: false),
-                          )),
-
-                      // Browse / create option
-                      _buildFolderTile(
-                        icon: Icons.more_horiz,
-                        iconColor: Colors.grey,
-                        title: 'Browse or create...',
-                        subtitle: 'Find another folder or create a new one',
-                        selected: false,
-                        onTap: _browseForFolder,
-                        showChevron: true,
-                      ),
-                    ],
-                  ),
+          // Photos folder
+          _buildSetupRow(
+            icon: Icons.folder,
+            iconColor: Colors.amber[700]!,
+            label: 'Photos folder',
+            value: folderLabel,
+            onChangeTap: _changeFolder,
           ),
-
-          // Continue button
-          SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: ElevatedButton(
-              onPressed: (_createNewFolder ||
-                      _selectedFolderId != null) &&
-                  !_creatingFolder
-                  ? _confirmFolder
-                  : null,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue[600],
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-              ),
-              child: _creatingFolder
-                  ? const SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2.5, color: Colors.white),
-                    )
-                  : const Text('Continue', style: TextStyle(fontSize: 16)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFolderTile({
-    required IconData icon,
-    required Color iconColor,
-    required String title,
-    String? subtitle,
-    required bool selected,
-    required VoidCallback onTap,
-    bool showChevron = false,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: ListTile(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-          side: BorderSide(
-            color: selected ? Colors.blue : Colors.grey[300]!,
-            width: selected ? 2 : 1,
-          ),
-        ),
-        tileColor: selected ? Colors.blue[50] : Colors.white,
-        leading: Icon(icon, color: iconColor),
-        title: Text(title),
-        subtitle: subtitle != null
-            ? Text(subtitle,
-                style: TextStyle(fontSize: 12, color: Colors.grey[500]))
-            : null,
-        trailing: selected
-            ? Icon(Icons.check_circle, color: Colors.blue[600])
-            : showChevron
-                ? const Icon(Icons.chevron_right)
-                : null,
-        onTap: onTap,
-      ),
-    );
-  }
-
-  // ── Step 4 UI ──
-
-  Widget _buildSheetStep() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 32, 24, 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Spreadsheet',
-            style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Where should extracted receipt data be saved?',
-            style: TextStyle(fontSize: 15, color: Colors.grey[600]),
-          ),
-          const SizedBox(height: 24),
-
-          // Option 1: Create new
-          ListTile(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-              side: BorderSide(
-                color: _createNewSheet ? Colors.blue : Colors.grey[300]!,
-                width: _createNewSheet ? 2 : 1,
-              ),
-            ),
-            tileColor: _createNewSheet ? Colors.blue[50] : Colors.white,
-            leading: Icon(Icons.add_circle_outline,
-                color: _createNewSheet ? Colors.blue[600] : Colors.grey),
-            title: const Text('Create new spreadsheet'),
-            subtitle: Text('In $_selectedFolderName',
-                style: TextStyle(fontSize: 12, color: Colors.grey[500])),
-            trailing: _createNewSheet
-                ? Icon(Icons.check_circle, color: Colors.blue[600])
-                : null,
-            onTap: () => setState(() => _createNewSheet = true),
-          ),
-
-          if (_createNewSheet) ...[
-            const SizedBox(height: 12),
-            TextField(
-              controller: _sheetNameController,
-              decoration: InputDecoration(
-                labelText: 'Spreadsheet name',
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              ),
-            ),
-          ],
-
           const SizedBox(height: 12),
 
-          // Option 2: Choose existing
-          ListTile(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-              side: BorderSide(
-                color: !_createNewSheet ? Colors.blue : Colors.grey[300]!,
-                width: !_createNewSheet ? 2 : 1,
-              ),
-            ),
-            tileColor: !_createNewSheet ? Colors.blue[50] : Colors.white,
-            leading: Icon(Icons.table_chart,
-                color: !_createNewSheet ? Colors.blue[600] : Colors.grey),
-            title: const Text('Use existing spreadsheet'),
-            subtitle: _existingSheetName != null
-                ? Text(_existingSheetName!,
-                    style: TextStyle(fontSize: 12, color: Colors.grey[500]))
-                : null,
-            trailing: !_createNewSheet
-                ? Icon(Icons.check_circle, color: Colors.blue[600])
-                : const Icon(Icons.chevron_right),
-            onTap: _pickExistingSheet,
+          // Spreadsheet
+          _buildSetupRow(
+            icon: Icons.table_chart,
+            iconColor: Colors.green[600]!,
+            label: 'Receipt spreadsheet',
+            value: sheetLabel,
+            onChangeTap: _changeSheet,
+          ),
+
+          const SizedBox(height: 16),
+          Text(
+            'You can change these anytime in Settings.',
+            style: TextStyle(fontSize: 13, color: Colors.grey[500]),
           ),
 
           const Spacer(),
 
-          // Get Started
+          // Set it up
           SizedBox(
             width: double.infinity,
             height: 52,
             child: ElevatedButton(
-              onPressed: (_createNewSheet || _existingSheetId != null) &&
-                      !_finishing
-                  ? _finish
-                  : null,
+              onPressed: !_finishing ? _finish : null,
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.green[600],
                 foregroundColor: Colors.white,
@@ -665,10 +539,49 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       child: CircularProgressIndicator(
                           strokeWidth: 2.5, color: Colors.white),
                     )
-                  : const Text('Get Started',
+                  : const Text('Set it up',
                       style:
                           TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSetupRow({
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required String value,
+    required VoidCallback onChangeTap,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: iconColor),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                const SizedBox(height: 2),
+                Text(value, style: const TextStyle(fontSize: 15)),
+              ],
+            ),
+          ),
+          GestureDetector(
+            onTap: onChangeTap,
+            child: Text('Change',
+                style: TextStyle(color: Colors.blue[600], fontSize: 14)),
           ),
         ],
       ),

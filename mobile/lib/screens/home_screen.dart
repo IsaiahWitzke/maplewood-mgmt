@@ -86,11 +86,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       final imageBytes = await photo.readAsBytes();
 
-      // Upload image, run OCR, and sync cache in parallel
+      // Sync cache in background (don't block capture)
+      SheetCache.sync();
+
+      // Upload image and run OCR in parallel
       final results = await Future.wait([
         StorageService.uploadReceiptImage(imageBytes),
         GeminiService.extractReceipt(imageBytes),
-        SheetCache.sync(),
       ]);
 
       final imageUrl = results[0] as String;

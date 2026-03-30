@@ -13,10 +13,11 @@ class Col {
   static const receiptDate = 'Receipt Date';
   static const inputDate = 'Input Date';
   static const image = 'Image';
+  static const description = 'Description';
 
   /// Default header order when creating a new spreadsheet.
   static const defaultHeaders = [
-    receiptNumber, project, vendor, totalCost, tax, receiptDate, inputDate, image,
+    receiptNumber, project, vendor, totalCost, tax, receiptDate, inputDate, image, description,
   ];
 }
 
@@ -130,6 +131,16 @@ class SheetCache {
       if (p.isNotEmpty) projects.add(p);
     }
     return projects.toList();
+  }
+
+  /// Get unique vendor names from cached data.
+  static List<String> getVendors() {
+    final vendors = <String>{};
+    for (final row in _rows) {
+      final v = row[Col.vendor] ?? '';
+      if (v.isNotEmpty) vendors.add(v);
+    }
+    return vendors.toList();
   }
 
   // --- Row building ---

@@ -52,56 +52,13 @@ class _ReviewScreenState extends State<ReviewScreen> {
       date: widget.receiptData.date ?? '',
       total: widget.receiptData.total,
     );
-    if (dupes.isNotEmpty) {
-      setState(() => _duplicates = dupes);
-    }
+    setState(() => _duplicates = dupes);
   }
 
-  void _showDuplicateModal(Map<String, String> r) {
-    final imageLink = r[Col.image] ?? '';
+  void _showDuplicateModal() {
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Possible Duplicate'),
-        content: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _modalRow('Project', r[Col.project] ?? ''),
-              _modalRow('Vendor', r[Col.vendor] ?? ''),
-              _modalRow('Date', r[Col.receiptDate] ?? ''),
-              _modalRow('Total', '\$${r[Col.totalCost] ?? ''}'),
-              _modalRow('Tax', (r[Col.tax] ?? '').isNotEmpty ? '\$${r[Col.tax]}' : '—'),
-              _modalRow('Added', r[Col.inputDate] ?? ''),
-              const SizedBox(height: 12),
-              if (imageLink.isNotEmpty)
-                InkWell(
-                  onTap: () => launchUrl(Uri.parse(imageLink),
-                      mode: LaunchMode.externalApplication),
-                  child: Row(
-                    children: [
-                      Icon(Icons.image, size: 18, color: Colors.blue[600]),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text('View receipt image',
-                            style: TextStyle(
-                                color: Colors.blue[600],
-                                decoration: TextDecoration.underline)),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
+      builder: (ctx) => _DuplicateModal(duplicates: _duplicates),
     );
   }
 
@@ -170,6 +127,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
         Col.receiptDate: _dateController.text,
         Col.inputDate: DateTime.now().toIso8601String(),
         Col.image: widget.imageUrl,
+        Col.description: widget.receiptData.description ?? '',
       });
 
       // Mark project as recently used
@@ -212,8 +170,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
             await Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const SettingsScreen()),
             );
-            _loadSheetName(); // Refresh after potential switch
+            _loadSheetName();
             _loadProjects();
+            _checkDuplicates();
           },
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -237,6 +196,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
               );
               _loadSheetName();
               _loadProjects();
+              _checkDuplicates();
             },
           ),
         ],
@@ -260,7 +220,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
                     borderRadius: BorderRadius.circular(8),
                     child: InkWell(
                       borderRadius: BorderRadius.circular(8),
-                      onTap: () => _showDuplicateModal(_duplicates.first),
+                      onTap: _showDuplicateModal,
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 10),
@@ -403,14 +363,162 @@ class _ReviewScreenState extends State<ReviewScreen> {
                           child: CircularProgressIndicator(
                               strokeWidth: 3, color: Colors.white),
                         )
-                      : const Text('GO',
-                          style: TextStyle(fontSize: 18)),
+                      : const Icon(Icons.cloud_upload, size: 28),
                 ),
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Modal that shows all duplicate matches with swipe pagination and embedded images.
+class _DuplicateModal extends StatefulWidget {
+  final List<Map<String, String>> duplicates;
+  const _DuplicateModal({required this.duplicates});
+
+  @override
+  State<_DuplicateModal> createState() => _DuplicateModalState();
+}
+
+class _DuplicateModalState extends State<_DuplicateModal> {
+  int _current = 0;
+  late final PageController _pageController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  Widget _row(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 65,
+            child: Text(label,
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[600],
+                    fontSize: 13)),
+          ),
+          Expanded(
+              child: Text(value.isEmpty ? '\u2014' : value,
+                  style: const TextStyle(fontSize: 13))),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPage(Map<String, String> r) {
+    final imageLink = r[Col.image] ?? '';
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _row('Project', r[Col.project] ?? ''),
+          _row('Vendor', r[Col.vendor] ?? ''),
+          _row('Date', r[Col.receiptDate] ?? ''),
+          _row('Total', '\$${r[Col.totalCost] ?? ''}'),
+          _row('Tax',
+              (r[Col.tax] ?? '').isNotEmpty ? '\$${r[Col.tax]}' : '\u2014'),
+          _row('Added', r[Col.inputDate] ?? ''),
+          if (imageLink.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.network(
+                imageLink,
+                height: 220,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                loadingBuilder: (_, child, progress) => progress == null
+                    ? child
+                    : const SizedBox(
+                        height: 220,
+                        child: Center(
+                            child:
+                                CircularProgressIndicator(strokeWidth: 2))),
+                errorBuilder: (_, __, ___) => InkWell(
+                  onTap: () => launchUrl(Uri.parse(imageLink),
+                      mode: LaunchMode.externalApplication),
+                  child: Container(
+                    height: 48,
+                    alignment: Alignment.centerLeft,
+                    child: Row(
+                      children: [
+                        Icon(Icons.image, size: 18, color: Colors.blue[600]),
+                        const SizedBox(width: 6),
+                        Text('Open image',
+                            style: TextStyle(
+                                color: Colors.blue[600],
+                                decoration: TextDecoration.underline)),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerRight,
+              child: GestureDetector(
+                onTap: () => launchUrl(Uri.parse(imageLink),
+                    mode: LaunchMode.externalApplication),
+                child: Text('Open full size',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.blue[600],
+                        decoration: TextDecoration.underline)),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final count = widget.duplicates.length;
+    return AlertDialog(
+      title: Row(
+        children: [
+          const Expanded(child: Text('Possible Duplicate')),
+          if (count > 1)
+            Text('${_current + 1}/$count',
+                style: TextStyle(fontSize: 14, color: Colors.grey[500])),
+        ],
+      ),
+      content: SizedBox(
+        width: double.maxFinite,
+        height: 380,
+        child: count == 1
+            ? _buildPage(widget.duplicates.first)
+            : PageView.builder(
+                controller: _pageController,
+                itemCount: count,
+                onPageChanged: (i) => setState(() => _current = i),
+                itemBuilder: (_, i) => _buildPage(widget.duplicates[i]),
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ],
     );
   }
 }

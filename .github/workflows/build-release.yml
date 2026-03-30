@@ -3,6 +3,7 @@ name: Build & Release APK
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -35,15 +36,17 @@ jobs:
 
       - name: Build release APK
         working-directory: mobile
-        run: flutter build apk --release
+        run: flutter build apk --release --build-number=${{ github.run_number }}
 
       - name: Get version
         id: version
         run: |
-          VERSION=$(grep 'version:' mobile/pubspec.yaml | head -1 | awk '{print $2}')
-          SHA_SHORT=$(git rev-parse --short HEAD)
-          echo "tag=v${VERSION}-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
-          echo "name=Maplewood v${VERSION} (${SHA_SHORT})" >> "$GITHUB_OUTPUT"
+          BASE=$(grep 'version:' mobile/pubspec.yaml | head -1 | awk '{print $2}' | cut -d'+' -f1)
+          MAJOR=$(echo $BASE | cut -d'.' -f1)
+          MINOR=$(echo $BASE | cut -d'.' -f2)
+          PATCH=${{ github.run_number }}
+          echo "tag=v${MAJOR}.${MINOR}.${PATCH}" >> "$GITHUB_OUTPUT"
+          echo "name=Maplewood v${MAJOR}.${MINOR}.${PATCH}" >> "$GITHUB_OUTPUT"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2

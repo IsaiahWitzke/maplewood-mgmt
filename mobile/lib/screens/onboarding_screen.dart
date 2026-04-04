@@ -37,6 +37,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   String? _existingSheetId;
   String? _existingSheetName;
   bool _finishing = false;
+  bool _detecting = false;
+  bool _folderAutoDetected = false;
+  bool _sheetAutoDetected = false;
 
   @override
   void dispose() {
@@ -51,6 +54,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeInOut,
     );
+    if (step == 3) _detectExisting();
   }
 
   // ── Step 2: Sign In ──
@@ -99,6 +103,49 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   // ── Step 4: Combined Drive Setup ──
+
+  Future<void> _detectExisting() async {
+    setState(() => _detecting = true);
+    try {
+      final driveApi = await AuthService.getDriveApi();
+
+      // Look for existing "Maplewood Receipts" folder
+      final folderResult = await driveApi.files.list(
+        q: "mimeType='application/vnd.google-apps.folder'"
+            " and name='Maplewood Receipts'"
+            " and trashed=false",
+        pageSize: 1,
+        $fields: 'files(id, name)',
+      );
+      if (folderResult.files != null && folderResult.files!.isNotEmpty) {
+        final folder = folderResult.files!.first;
+        _selectedFolderId = folder.id;
+        _selectedFolderName = folder.name ?? 'Maplewood Receipts';
+        _createNewFolder = false;
+        _folderAutoDetected = true;
+      }
+
+      // Look for existing "Maplewood Receipts" spreadsheet
+      final sheetResult = await driveApi.files.list(
+        q: "mimeType='application/vnd.google-apps.spreadsheet'"
+            " and name='Maplewood Receipts'"
+            " and trashed=false",
+        pageSize: 1,
+        $fields: 'files(id, name)',
+      );
+      if (sheetResult.files != null && sheetResult.files!.isNotEmpty) {
+        final sheet = sheetResult.files!.first;
+        _existingSheetId = sheet.id;
+        _existingSheetName = sheet.name ?? 'Maplewood Receipts';
+        _createNewSheet = false;
+        _sheetAutoDetected = true;
+      }
+    } catch (e) {
+      // Detection failed silently — keep defaults (create new)
+      print('Auto-detect error: $e');
+    }
+    if (mounted) setState(() => _detecting = false);
+  }
 
   Future<void> _changeFolder() async {
     final result = await Navigator.of(context).push<FolderSelection>(
@@ -470,12 +517,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   // ── Step 4: Combined Drive Setup ──
 
   Widget _buildDriveSetupStep() {
-    final folderLabel = _createNewFolder
-        ? 'Maplewood Receipts (new folder)'
-        : _selectedFolderName;
-    final sheetLabel = _createNewSheet
-        ? 'Maplewood Receipts (new spreadsheet)'
-        : _existingSheetName ?? 'Not set';
+    final String folderLabel;
+    if (_createNewFolder) {
+      folderLabel = 'Maplewood Receipts (new folder)';
+    } else if (_folderAutoDetected) {
+      folderLabel = '$_selectedFolderName (automatically detected)';
+    } else {
+      folderLabel = _selectedFolderName;
+    }
+    final String sheetLabel;
+    if (_createNewSheet) {
+      sheetLabel = 'Maplewood Receipts (new spreadsheet)';
+    } else if (_sheetAutoDetected) {
+      sheetLabel = '${_existingSheetName ?? 'Maplewood Receipts'} (automatically detected)';
+    } else {
+      sheetLabel = _existingSheetName ?? 'Not set';
+    }
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 32, 24, 16),
@@ -525,7 +582,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             width: double.infinity,
             height: 52,
             child: ElevatedButton(
-              onPressed: !_finishing ? _finish : null,
+              onPressed: !_finishing && !_detecting ? _finish : null,
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.green[600],
                 foregroundColor: Colors.white,

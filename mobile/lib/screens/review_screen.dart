@@ -450,7 +450,7 @@ class _DuplicateModalState extends State<_DuplicateModal> {
                         child: Center(
                             child:
                                 CircularProgressIndicator(strokeWidth: 2))),
-                errorBuilder: (_, __, ___) => InkWell(
+                errorBuilder: (_, _, _) => InkWell(
                   onTap: () => launchUrl(Uri.parse(imageLink),
                       mode: LaunchMode.externalApplication),
                   child: Container(
